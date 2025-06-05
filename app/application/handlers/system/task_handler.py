@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.application.handlers.base_handler import BaseHandler
-from app.application.services.task_service import TaskService
+from app.application.services.system.task_service import TaskService
 from app.infrastructure.tasks.task_manager import task_manager
 from app.infrastructure.tasks.task_registry import task_registry
 from app.schemas.dtos.request.task_request import TaskCreateRequest

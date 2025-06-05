@@ -1,7 +1,7 @@
 # app/api/v1/routers/health_router.py
 from fastapi import APIRouter, Depends
 
-from app.application.handlers.health_handler import HealthHandler
+from app.application.handlers.system.health_handler import HealthHandler
 from app.schemas.dtos.response.base_response import BaseResponse
 from app.schemas.dtos.response.health_response import HealthData
 

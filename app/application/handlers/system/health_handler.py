@@ -4,7 +4,7 @@ from datetime import datetime
 
 from app.application.handlers.base_handler import BaseHandler
 from app.schemas.dtos.response.health_response import HealthData
-from app.application.services.health_service import HealthService
+from app.application.services.system.health_service import HealthService
 
 
 class HealthHandler(BaseHandler[HealthData]):

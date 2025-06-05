@@ -1,9 +1,9 @@
-# app/application/services/health_service.py
+# app/application/services/system/health_service.py
 import asyncio
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Any
 
-from app.application.services.base_service import BaseService
+from app.application.services.service_interface import BaseService
 from app.schemas.dtos.response.health_response import HealthData
 
 
@@ -13,6 +13,16 @@ class HealthService(BaseService):
     def __init__(self):
         super().__init__()
         self.start_time = datetime.utcnow()
+    
+    def get_service_info(self) -> Dict[str, Any]:
+        """服务信息"""
+        return {
+            "service_name": self.service_name,
+            "description": "系统健康检查服务",
+            "version": "1.0.0",
+            "category": "system",
+            "dependencies": self.settings.health_dependencies
+        }
     
     async def check_health(self) -> HealthData:
         """异步健康检查"""
@@ -106,13 +116,13 @@ class HealthService(BaseService):
     async def _check_database(self) -> str:
         """检查数据库健康状态"""
         # TODO: 实现数据库连接检查
-        # 这里暂时返回healthy，实际应该测试数据库连接
         await asyncio.sleep(0.01)  # 模拟数据库检查
         return "healthy"
     
     async def _check_s3(self) -> str:
         """检查S3健康状态"""
         # TODO: 实现S3连接检查
-        # 这里暂时返回healthy，实际应该测试S3连接
         await asyncio.sleep(0.01)  # 模拟S3检查
         return "healthy"
+
+
