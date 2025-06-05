@@ -1,0 +1,51 @@
+# app/config/core_config.yaml - 核心框架配置
+framework:
+  name: "FastAPI DDD Framework"
+  version: "0.1.0"
+  debug: false
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+
+api:
+  prefix: "/api/v1"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+cors:
+  allowed_origins:
+    - "*"
+  allow_credentials: true
+  allow_methods:
+    - "*"
+  allow_headers:
+    - "*"
+
+logging:
+  level: "INFO"
+  format: "json"  # json or console
+  log_sql: false
+
+security:
+  jwt_algorithm: "HS256"
+  jwt_expire_minutes: 30
+
+infrastructure:
+  cache:
+    default_ttl: 3600
+    key_prefix: "app:"
+    max_size: 10000
+
+  tasks:
+    max_workers: 4
+    retry_attempts: 3
+    retry_delay: 5
+    result_cache_size: 1000
+    result_cache_ttl: 7200
+
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 100
+    burst_size: 20

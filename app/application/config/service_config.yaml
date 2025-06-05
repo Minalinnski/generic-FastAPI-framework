@@ -1,0 +1,36 @@
+# app/config/service_config.yaml - 业务服务配置
+services:
+  health:
+    check_timeout: 5
+    dependencies:
+      - "database"
+      - "cache" 
+      - "s3"
+
+  task_service:
+    default_timeout: 300
+    max_concurrent_tasks: 10
+    cleanup_interval: 3600
+
+aws:
+  region: "us-west-2"
+  s3:
+    bucket_prefix: "fastapi-ddd"
+    upload_timeout: 300
+    download_timeout: 60
+
+database:
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+
+monitoring:
+  enable_metrics: true
+  enable_tracing: true
+  sample_rate: 0.1
+
+notifications:
+  slack:
+    enabled: false
+    webhook_timeout: 10

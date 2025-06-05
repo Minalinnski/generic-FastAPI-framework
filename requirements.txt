@@ -1,0 +1,55 @@
+# requirements.txt
+
+# FastAPI核心
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+starlette>=0.27.0
+
+# 数据验证和序列化
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# YAML配置支持
+PyYAML>=6.0.1
+
+# 日志系统
+structlog>=23.2.0
+
+# AWS服务 - 修复版本冲突
+boto3>=1.35.36
+botocore>=1.35.36
+
+# 异步支持
+aiofiles>=23.2.1
+# 异步AWS支持（可选，如需要真正的异步S3操作）
+# aiobotocore>=2.15.2
+
+# HTTP客户端
+httpx>=0.25.2
+
+# 时区支持
+pytz>=2023.3
+
+# 开发和测试工具
+pytest>=7.4.3
+pytest-asyncio>=0.21.1
+pytest-cov>=4.1.0
+
+# 代码质量
+black>=23.11.0
+isort>=5.12.0
+flake8>=6.1.0
+mypy>=1.7.1
+
+# 类型提示
+types-PyYAML>=6.0.12.12
+types-requests>=2.31.0.10
+
+# 可选依赖（按需安装）
+# redis>=5.0.1  # 如果需要Redis缓存
+sqlalchemy>=2.0.23  # 如果需要数据库ORM
+# alembic>=1.13.0  # 如果需要数据库迁移
+# celery>=5.3.4  # 如果需要分布式任务队列
+# prometheus-client>=0.19.0  # 如果需要监控指标
+# psycopg2-binary>=2.9.9  # 如果需要PostgreSQL
+# asyncpg>=0.29.0  # 如果需要异步PostgreSQL

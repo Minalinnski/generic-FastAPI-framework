@@ -1,0 +1,179 @@
+# app/core/logging/logger.py
+import logging
+import sys
+from functools import lru_cache
+from typing import Any, Dict, Optional
+
+import structlog
+from structlog.typing import FilteringBoundLogger
+
+from app.config.settings import get_settings
+
+settings = get_settings()
+
+
+def setup_logging() -> None:
+    """设置日志配置"""
+    
+    # 配置标准库logging
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=getattr(logging, settings.log_level.upper()),
+    )
+    
+    # 根据配置选择处理器
+    processors = [
+        structlog.contextvars.merge_contextvars,
+        # structlog.stdlib.add_log_level,  # 或 structlog.processors.add_log_level
+        # structlog.stdlib.add_logger_name,  # 修改这一行
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+    ]
+    
+    # 添加格式化处理器
+    if settings.log_format == "json":
+        processors.append(structlog.processors.JSONRenderer())
+    else:
+        processors.append(
+            structlog.dev.ConsoleRenderer(
+                colors=True,
+                exception_formatter=structlog.dev.rich_traceback
+            )
+        )
+    
+    # 配置structlog
+    structlog.configure(
+        processors=processors,
+        wrapper_class=structlog.make_filtering_bound_logger(
+            getattr(logging, settings.log_level.upper())
+        ),
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+@lru_cache()
+def get_logger(name: Optional[str] = None) -> FilteringBoundLogger:
+    """获取结构化日志器"""
+    return structlog.get_logger(name)
+
+
+class LoggerMixin:
+    """日志混入类，为其他类提供日志功能"""
+    
+    @property
+    def logger(self) -> FilteringBoundLogger:
+        return get_logger(self.__class__.__name__)
+
+
+def log_function_call(
+    func_name: str, 
+    args: tuple = (), 
+    kwargs: dict = None, 
+    **extra: Any
+) -> None:
+    """记录函数调用日志"""
+    logger = get_logger()
+    logger.info(
+        f"调用函数: {func_name}",
+        func_name=func_name,
+        args_count=len(args),
+        kwargs_keys=list((kwargs or {}).keys()),
+        **extra
+    )
+
+
+def log_exception(
+    exc: Exception, 
+    context: Optional[Dict[str, Any]] = None,
+    logger_name: Optional[str] = None
+) -> None:
+    """记录异常日志"""
+    logger = get_logger(logger_name)
+    logger.error(
+        f"发生异常: {exc.__class__.__name__}",
+        exception_message=str(exc),
+        exception_type=exc.__class__.__name__,
+        exception_module=exc.__class__.__module__,
+        context=context or {},
+        exc_info=True
+    )
+
+
+def log_performance(
+    operation: str,
+    duration: float,
+    **metrics: Any
+) -> None:
+    """记录性能日志"""
+    logger = get_logger("performance")
+    logger.info(
+        f"性能指标: {operation}",
+        operation=operation,
+        duration_seconds=round(duration, 4),
+        **metrics
+    )
+
+
+def log_audit(
+    action: str,
+    user_id: Optional[str] = None,
+    resource: Optional[str] = None,
+    **details: Any
+) -> None:
+    """记录审计日志"""
+    logger = get_logger("audit")
+    logger.info(
+        f"审计记录: {action}",
+        action=action,
+        user_id=user_id,
+        resource=resource,
+        **details
+    )
+
+
+class StructuredLogger:
+    """结构化日志器封装"""
+    
+    def __init__(self, name: str):
+        self.logger = get_logger(name)
+        self.name = name
+    
+    def debug(self, message: str, **kwargs: Any) -> None:
+        """调试日志"""
+        self.logger.debug(message, **kwargs)
+    
+    def info(self, message: str, **kwargs: Any) -> None:
+        """信息日志"""
+        self.logger.info(message, **kwargs)
+    
+    def warning(self, message: str, **kwargs: Any) -> None:
+        """警告日志"""
+        self.logger.warning(message, **kwargs)
+    
+    def error(self, message: str, **kwargs: Any) -> None:
+        """错误日志"""
+        self.logger.error(message, **kwargs)
+    
+    def critical(self, message: str, **kwargs: Any) -> None:
+        """严重错误日志"""
+        self.logger.critical(message, **kwargs)
+    
+    def bind(self, **kwargs: Any) -> "StructuredLogger":
+        """绑定上下文信息"""
+        new_logger = StructuredLogger(self.name)
+        new_logger.logger = self.logger.bind(**kwargs)
+        return new_logger
+    
+    def with_request_id(self, request_id: str) -> "StructuredLogger":
+        """绑定请求ID"""
+        return self.bind(request_id=request_id)
+    
+    def with_user_id(self, user_id: str) -> "StructuredLogger":
+        """绑定用户ID"""
+        return self.bind(user_id=user_id)
+    
+    def with_operation(self, operation: str) -> "StructuredLogger":
+        """绑定操作名称"""
+        return self.bind(operation=operation)
