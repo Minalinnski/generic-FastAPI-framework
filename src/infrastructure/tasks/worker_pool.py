@@ -105,6 +105,7 @@ class WorkerPool:
     async def get_worker(self) -> Optional[Worker]:
         """获取可用工作者"""
         if not self.available_workers:
+            self.logger.debug("没有可用工作者")
             return None
         
         worker_id = self.available_workers.pop()
@@ -115,6 +116,7 @@ class WorkerPool:
         worker.last_used_at = datetime.utcnow()
         self.busy_workers.add(worker_id)
         
+        self.logger.debug(f"分配工作者: {worker_id}")
         return worker
     
     async def release_worker(self, worker: Worker) -> None:
@@ -140,6 +142,8 @@ class WorkerPool:
             
             if task_id_to_remove:
                 del self.task_to_worker[task_id_to_remove]
+            
+            self.logger.debug(f"释放工作者: {worker_id}")
     
     def get_worker_by_task(self, task_id: str) -> Optional[Worker]:
         """根据任务ID获取工作者"""
@@ -149,7 +153,7 @@ class WorkerPool:
         return None
     
     async def execute_task(self, task, worker: Worker) -> Any:
-        """通过工作者执行任务（兼容性方法）"""
+        """通过工作者执行任务"""
         return await self._execute_task_internal(task, worker)
     
     async def _execute_task_internal(self, task, worker: Worker) -> Any:
@@ -160,10 +164,15 @@ class WorkerPool:
         
         start_time = datetime.utcnow()
         
+        self.logger.info(f"工作者 {worker.worker_id} 开始执行任务 {task_id}", extra={
+            "worker_id": worker.worker_id,
+            "task_id": task_id,
+            "task_name": getattr(task, 'task_name', 'unknown'),
+            "task_type": type(task).__name__
+        })
+        
         try:
-            self.logger.debug(f"工作者 {worker.worker_id} 开始执行任务 {task_id}")
-            
-            # 执行任务
+            # 直接执行任务的execute方法
             result = await task.execute()
             
             # 更新统计
@@ -171,15 +180,26 @@ class WorkerPool:
             self.stats["tasks_executed"] += 1
             self.stats["total_execution_time"] += execution_time
             
-            self.logger.debug(f"工作者 {worker.worker_id} 完成任务 {task_id}", extra={
-                "execution_time": execution_time
+            self.logger.info(f"工作者 {worker.worker_id} 完成任务 {task_id}", extra={
+                "worker_id": worker.worker_id,
+                "task_id": task_id,
+                "execution_time": execution_time,
+                "result_type": type(result).__name__ if result is not None else "None"
             })
             
             return result
             
         except Exception as e:
             self.stats["tasks_failed"] += 1
-            self.logger.error(f"工作者 {worker.worker_id} 执行任务 {task_id} 失败: {str(e)}")
+            execution_time = (datetime.utcnow() - start_time).total_seconds()
+            
+            self.logger.error(f"工作者 {worker.worker_id} 执行任务 {task_id} 失败", extra={
+                "worker_id": worker.worker_id,
+                "task_id": task_id,
+                "execution_time": execution_time,
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=True)
             raise
     
     async def _create_worker(self) -> Worker:

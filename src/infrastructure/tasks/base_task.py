@@ -203,8 +203,14 @@ class SimpleTask(BaseTask):
     async def execute(self, **kwargs) -> Any:
         """执行函数任务"""
         try:
-            # 合并参数
+            # 合并参数：任务创建时的params + 执行时的kwargs
             all_params = {**self.params, **kwargs}
+            
+            self.logger.debug(f"执行简单任务: {self.task_name}", extra={
+                "task_name": self.task_name,
+                "func_name": getattr(self.task_func, '__name__', 'unknown'),
+                "params": all_params
+            })
             
             # 检查函数是否是异步的
             import asyncio
@@ -215,10 +221,20 @@ class SimpleTask(BaseTask):
             else:
                 result = self.task_func(**all_params)
             
+            self.logger.info(f"简单任务执行成功: {self.task_name}", extra={
+                "task_name": self.task_name,
+                "result_type": type(result).__name__
+            })
+            
             return result
             
         except Exception as e:
-            self.logger.error(f"简单任务执行失败: {self.task_name} - {str(e)}")
+            self.logger.error(f"简单任务执行失败: {self.task_name} - {str(e)}", extra={
+                "task_name": self.task_name,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "params": self.params
+            }, exc_info=True)
             raise
 
 
@@ -284,6 +300,7 @@ def create_simple_task(
     priority: int = 1,
     timeout: Optional[int] = None,
     max_retries: int = 0,
+    params: Optional[Dict[str, Any]] = None,
     **kwargs
 ) -> SimpleTask:
     """
@@ -295,12 +312,13 @@ def create_simple_task(
         priority: 优先级(0-3)
         timeout: 超时时间(秒)
         max_retries: 最大重试次数
+        params: 任务参数字典
         **kwargs: 其他任务参数
     
     Returns:
         SimpleTask: 简单任务实例
     """
-    return SimpleTask(
+    task = SimpleTask(
         task_name=task_name,
         task_func=task_func,
         priority=TaskPriority.from_int(priority),
@@ -308,6 +326,12 @@ def create_simple_task(
         max_retries=max_retries,
         **kwargs
     )
+    
+    # 设置任务参数
+    if params:
+        task.params = params
+    
+    return task
 
 
 def create_service_task(
@@ -317,6 +341,7 @@ def create_service_task(
     priority: int = 1,
     timeout: Optional[int] = None,
     max_retries: int = 0,
+    params: Optional[Dict[str, Any]] = None,
     **kwargs
 ) -> ServiceTask:
     """
@@ -329,12 +354,13 @@ def create_service_task(
         priority: 优先级(0-3)
         timeout: 超时时间(秒)
         max_retries: 最大重试次数
+        params: 任务参数字典
         **kwargs: 其他任务参数
     
     Returns:
         ServiceTask: 服务任务实例
     """
-    return ServiceTask(
+    task = ServiceTask(
         task_name=task_name,
         service_instance=service_instance,
         method_name=method_name,
@@ -343,3 +369,9 @@ def create_service_task(
         max_retries=max_retries,
         **kwargs
     )
+    
+    # 设置任务参数
+    if params:
+        task.params = params
+    
+    return task

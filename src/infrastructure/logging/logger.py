@@ -18,8 +18,8 @@ def setup_logging():
         # 简单的JSON格式
         log_format = '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}'
     else:
-        # 传统格式
-        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        # 传统格式，添加更多信息
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
     
     # Configure root logger
     logging.basicConfig(
@@ -29,6 +29,10 @@ def setup_logging():
         force=True  # 覆盖已有配置
     )
     
+    # 确保我们的应用日志级别正确
+    app_logger = logging.getLogger("src")
+    app_logger.setLevel(log_level)
+    
     # Set lower level for noisy libraries
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)
@@ -36,7 +40,7 @@ def setup_logging():
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     
     logger = logging.getLogger(__name__)
-    logger.debug(f"Logging configured with level: {settings.log_level}")
+    logger.info(f"Logging configured with level: {settings.log_level}, format: {settings.log_format}")
 
 
 @lru_cache()

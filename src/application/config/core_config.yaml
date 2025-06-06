@@ -24,7 +24,7 @@ cors:
     - "*"
 
 logging:
-  level: "INFO"
+  level: "DEBUG"
   format: "console"  # json or console
   log_sql: false
 

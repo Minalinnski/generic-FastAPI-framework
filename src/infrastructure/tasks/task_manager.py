@@ -282,6 +282,15 @@ class TaskManager:
         # 记录运行状态
         self.running_tasks[task_id] = task
         
+        self.logger.info(f"开始执行任务: {task_id}", extra={
+            "task_id": task_id,
+            "task_name": task.task_name,
+            "task_type": type(task).__name__,
+            "worker_id": worker.worker_id,
+            "priority": task.priority.value,
+            "timeout": task.timeout
+        })
+        
         # 创建执行Future
         future = asyncio.create_task(self._run_task_with_timeout(task, worker))
         self.task_futures[task_id] = future
@@ -292,19 +301,42 @@ class TaskManager:
     async def _run_task_with_timeout(self, task: BaseTask, worker) -> Any:
         """带超时的任务执行"""
         try:
+            self.logger.debug(f"任务开始执行: {task.task_id}", extra={
+                "task_id": task.task_id,
+                "worker_id": worker.worker_id,
+                "has_timeout": bool(task.timeout)
+            })
+            
             if task.timeout:
-                return await asyncio.wait_for(
-                    worker.execute_task(task),
+                result = await asyncio.wait_for(
+                    self.worker_pool.execute_task(task, worker),
                     timeout=task.timeout
                 )
             else:
-                return await worker.execute_task(task)
+                result = await self.worker_pool.execute_task(task, worker)
+            
+            self.logger.debug(f"任务执行成功: {task.task_id}", extra={
+                "task_id": task.task_id,
+                "result_type": type(result).__name__ if result is not None else "None"
+            })
+            
+            return result
+            
         except asyncio.TimeoutError:
             task.status = TaskStatus.TIMEOUT
+            self.logger.warning(f"任务执行超时: {task.task_id}", extra={
+                "task_id": task.task_id,
+                "timeout": task.timeout
+            })
             raise
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
+            self.logger.error(f"任务执行失败: {task.task_id}", extra={
+                "task_id": task.task_id,
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=True)
             raise
     
     async def _handle_task_completion(self, task: BaseTask, future: asyncio.Future) -> None:
@@ -322,22 +354,53 @@ class TaskManager:
             
             self.stats["total_completed"] += 1
             
+            self.logger.info(f"任务完成: {task_id}", extra={
+                "task_id": task_id,
+                "task_name": task.task_name,
+                "status": task.status.value,
+                "duration": task.duration,
+                "worker_id": task.worker_id
+            })
+            
             # 处理回调
             await self.callback_manager.trigger_callbacks(task, "success")
             
         except asyncio.CancelledError:
             task.status = TaskStatus.CANCELLED
             task.end_time = datetime.utcnow()
+            if task.start_time:
+                task.duration = (task.end_time - task.start_time).total_seconds()
+            
+            self.logger.info(f"任务被取消: {task_id}", extra={
+                "task_id": task_id,
+                "task_name": task.task_name
+            })
             
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
             task.end_time = datetime.utcnow()
+            if task.start_time:
+                task.duration = (task.end_time - task.start_time).total_seconds()
             
             self.stats["total_failed"] += 1
             
+            self.logger.error(f"任务失败: {task_id}", extra={
+                "task_id": task_id,
+                "task_name": task.task_name,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "retry_count": task.retry_count,
+                "max_retries": task.max_retries
+            })
+            
             # 重试逻辑
             if task.retry_count < task.max_retries:
+                self.logger.info(f"准备重试任务: {task_id}", extra={
+                    "task_id": task_id,
+                    "retry_count": task.retry_count + 1,
+                    "max_retries": task.max_retries
+                })
                 await self._retry_task(task)
                 return
             
@@ -346,12 +409,19 @@ class TaskManager:
         
         finally:
             # 存储结果
-            await self.storage.store_result(task_id, task.to_dict())
+            try:
+                await self.storage.store_result(task_id, task.to_dict())
+                self.logger.debug(f"任务结果已存储: {task_id}")
+            except Exception as storage_error:
+                self.logger.error(f"存储任务结果失败: {task_id}", extra={
+                    "storage_error": str(storage_error)
+                })
             
             # 释放工作者
             worker = self.worker_pool.get_worker_by_task(task_id)
             if worker:
                 await self.worker_pool.release_worker(worker)
+                self.logger.debug(f"工作者已释放: {worker.worker_id}")
             
             # 清理引用
             self._cleanup_task_references(task_id)
@@ -361,7 +431,9 @@ class TaskManager:
         task.retry_count += 1
         task.status = TaskStatus.PENDING
         task.start_time = None
+        task.end_time = None
         task.worker_id = None
+        task.error = None
         
         # 清理当前执行状态
         self._cleanup_task_references(task.task_id)
@@ -369,7 +441,12 @@ class TaskManager:
         # 重新加入队列
         self.priority_queues[task.priority].appendleft(task)
         
-        self.logger.info(f"任务重试: {task.task_id} ({task.retry_count}/{task.max_retries})")
+        self.logger.info(f"任务重试: {task.task_id}", extra={
+            "task_id": task.task_id,
+            "retry_count": task.retry_count,
+            "max_retries": task.max_retries,
+            "queue_size": len(self.priority_queues[task.priority])
+        })
     
     def _cleanup_task_references(self, task_id: str) -> None:
         """清理任务引用"""

@@ -1,266 +1,281 @@
-# src/application/services/foo_service.py (支持回调的更新版)
+# src/application/services/foo_service.py
 import asyncio
 import random
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional
 
 from src.application.services.service_interface import BaseService
-from src.infrastructure.tasks.callback_manager import CallbackManager, CallbackType, CallbackTrigger
+from src.infrastructure.decorators.retry import network_retry, simple_retry
+from src.infrastructure.decorators.cache import api_cache
 
 
 class FooService(BaseService):
-    """Foo服务 - 支持回调功能的演示服务"""
+    """
+    Foo服务 - 专注具体业务逻辑实现
+    
+    职责：
+    1. 具体的业务逻辑处理
+    2. 外部依赖调用（模拟）
+    3. 数据转换和计算
+    """
     
     def __init__(self):
         super().__init__()
-        # 每个服务可以选择是否启用回调管理器
-        self.callback_manager = CallbackManager()
-        self.enable_callbacks = True  # 服务级开关
+        self._processing_count = 0
     
     def get_service_info(self) -> Dict[str, Any]:
         return {
             "service_name": self.service_name,
-            "description": "Foo演示服务 - 支持异步回调",
-            "version": "1.1.0",
+            "description": "Foo演示服务 - DDD架构示例",
+            "version": "2.0.0",
             "category": "demo",
-            "features": ["async_processing", "callback_support", "webhook_notifications"]
+            "features": [
+                "sync_processing", 
+                "async_processing", 
+                "batch_processing",
+                "retry_mechanism",
+                "caching_support"
+            ],
+            "processing_count": self._processing_count
         }
     
     async def process_data_async(
         self, 
         data: Dict[str, Any], 
-        callback_url: Optional[str] = None,
-        on_success: Optional[Callable] = None,
-        on_failure: Optional[Callable] = None
+        processing_time: float = 2.0,
+        callback_url: Optional[str] = None
     ) -> Dict[str, Any]:
-        """异步数据处理 - 支持回调"""
-        self.logger.info("开始异步数据处理")
+        """
+        异步数据处理 - 模拟复杂的异步业务逻辑
+        """
+        process_id = f"async_{self._processing_count:04d}"
+        self._processing_count += 1
         
-        # 生成处理ID用于回调跟踪
-        process_id = f"process_{random.randint(10000, 99999)}"
-        
-        # 注册回调（如果启用）
-        if self.enable_callbacks:
-            await self._register_callbacks(process_id, callback_url, on_success, on_failure)
+        self.logger.info(f"开始异步数据处理: {process_id}", extra={
+            "process_id": process_id,
+            "data_size": len(str(data)),
+            "processing_time": processing_time,
+            "has_callback": bool(callback_url)
+        })
         
         try:
             # 模拟复杂处理
-            processing_time = random.uniform(2, 5)
             await asyncio.sleep(processing_time)
             
-            # 模拟偶发失败
-            if random.random() < 0.1:
-                raise Exception("模拟处理失败")
+            # 模拟偶发失败（5%概率）
+            if random.random() < 0.05:
+                raise Exception(f"模拟处理失败: {process_id}")
             
-            result = {
+            # 模拟数据处理结果
+            processed_data = {
+                **data,
                 "processed": True,
                 "process_id": process_id,
-                "original_data": data,
+                "processing_time": processing_time,
                 "processed_at": datetime.utcnow().isoformat(),
                 "processing_type": "async",
-                "processing_time": processing_time
+                "data_size": len(str(data)),
+                "enhancement": f"enhanced_value_{random.randint(1000, 9999)}"
             }
             
-            # 触发成功回调
-            if self.enable_callbacks:
-                await self._trigger_success_callbacks(process_id, result)
+            # 如果有回调URL，模拟回调注册
+            if callback_url:
+                processed_data["callback_registered"] = True
+                processed_data["callback_url"] = callback_url
             
-            return result
+            self.logger.info(f"异步数据处理完成: {process_id}", extra={
+                "process_id": process_id,
+                "success": True
+            })
+            
+            return processed_data
             
         except Exception as e:
-            error_result = {
-                "processed": False,
-                "process_id": process_id,
-                "error": str(e),
-                "failed_at": datetime.utcnow().isoformat()
-            }
-            
-            # 触发失败回调
-            if self.enable_callbacks:
-                await self._trigger_failure_callbacks(process_id, error_result)
-            
+            self.logger.error(f"异步数据处理失败: {process_id} - {str(e)}")
             raise
     
-    def process_data_sync(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """同步数据处理"""
-        self.logger.info("开始同步数据处理")
-        
-        # 模拟快速处理
-        import time
-        time.sleep(random.uniform(0.1, 0.5))
-        
-        return {
-            "processed": True,
-            "original_data": data,
-            "processed_at": datetime.utcnow().isoformat(),
-            "processing_type": "sync"
-        }
-    
-    async def process_with_external_api(
+    @simple_retry(attempts=2, delay=0.1)  # Service层重试外部调用
+    def process_data_sync(
         self, 
         data: Dict[str, Any], 
-        external_callback_url: str
+        processing_time: float = 0.5
     ) -> Dict[str, Any]:
         """
-        调用外部API并支持回调链
-        
-        演示场景：
-        1. 处理数据
-        2. 调用外部异步API
-        3. 等待外部API回调
-        4. 触发最终回调
+        同步数据处理 - 模拟快速的同步业务逻辑
         """
-        process_id = f"external_process_{random.randint(10000, 99999)}"
+        process_id = f"sync_{self._processing_count:04d}"
+        self._processing_count += 1
         
-        self.logger.info(f"开始外部API处理: {process_id}")
-        
-        # Step 1: 本地预处理
-        preprocessed_data = {
-            **data,
-            "preprocessed_at": datetime.utcnow().isoformat(),
-            "process_id": process_id
-        }
-        
-        # Step 2: 注册外部API完成后的回调
-        if self.enable_callbacks:
-            await self.callback_manager.webhook_on_completion(
-                process_id,
-                external_callback_url,
-                auth_token="service_token_123",
-                process_data=preprocessed_data
-            )
-        
-        # Step 3: 模拟调用外部异步API
-        external_response = await self._call_external_async_api(preprocessed_data)
-        
-        return {
+        self.logger.info(f"开始同步数据处理: {process_id}", extra={
             "process_id": process_id,
-            "status": "submitted_to_external_api",
-            "external_tracking_id": external_response.get("tracking_id"),
-            "callback_registered": self.enable_callbacks,
-            "message": "处理已提交到外部API，将通过回调通知结果"
-        }
-    
-    async def handle_external_callback(
-        self, 
-        process_id: str, 
-        external_result: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """处理外部API的回调"""
-        self.logger.info(f"收到外部API回调: {process_id}")
+            "processing_time": processing_time
+        })
         
         try:
-            # 处理外部API结果
-            final_result = {
+            # 模拟处理时间
+            time.sleep(processing_time)
+            
+            # 模拟偶发失败（2%概率，比异步低）
+            if random.random() < 0.02:
+                raise Exception(f"模拟同步处理失败: {process_id}")
+            
+            processed_data = {
+                **data,
+                "processed": True,
                 "process_id": process_id,
-                "external_result": external_result,
-                "final_processed_at": datetime.utcnow().isoformat(),
-                "status": "completed"
+                "processing_time": processing_time,
+                "processed_at": datetime.utcnow().isoformat(),
+                "processing_type": "sync",
+                "data_size": len(str(data)),
+                "quick_result": f"quick_{random.randint(100, 999)}"
             }
             
-            # 这里可以触发后续的业务逻辑或通知
-            self.logger.info(f"外部API处理完成: {process_id}")
-            return final_result
+            self.logger.info(f"同步数据处理完成: {process_id}")
+            return processed_data
             
         except Exception as e:
-            self.logger.error(f"处理外部API回调失败: {process_id} - {str(e)}")
+            self.logger.error(f"同步数据处理失败: {process_id} - {str(e)}")
             raise
     
-    async def _register_callbacks(
+    async def process_batch_async(
         self, 
-        process_id: str, 
-        callback_url: Optional[str] = None,
-        on_success: Optional[Callable] = None,
-        on_failure: Optional[Callable] = None
-    ) -> None:
-        """注册回调"""
-        # 启动回调管理器（如果未启动）
-        if not self.callback_manager._running:
-            await self.callback_manager.start()
+        items: List[Dict[str, Any]], 
+        processing_time: float = 1.0
+    ) -> List[Dict[str, Any]]:
+        """
+        批量异步处理 - 模拟批量业务逻辑
+        """
+        batch_id = f"batch_{self._processing_count:04d}"
+        self._processing_count += 1
         
-        # 注册Webhook回调
-        if callback_url:
-            self.callback_manager.webhook_on_completion(
-                process_id, callback_url, 
-                service="FooService", timestamp=datetime.utcnow().isoformat()
-            )
+        self.logger.info(f"开始批量处理: {batch_id}", extra={
+            "batch_id": batch_id,
+            "batch_size": len(items),
+            "processing_time": processing_time
+        })
         
-        # 注册函数回调
-        if on_success:
-            self.callback_manager.on_success(process_id, on_success)
+        results = []
         
-        if on_failure:
-            self.callback_manager.on_failure(process_id, on_failure)
+        for i, item in enumerate(items):
+            try:
+                # 模拟每个项目的处理时间
+                await asyncio.sleep(processing_time / len(items))
+                
+                # 模拟部分失败（10%概率）
+                if random.random() < 0.1:
+                    raise Exception(f"批量项目 {i} 处理失败")
+                
+                result = {
+                    **item,
+                    "success": True,
+                    "batch_id": batch_id,
+                    "item_index": i,
+                    "processed_at": datetime.utcnow().isoformat(),
+                    "batch_result": f"batch_item_{i}_{random.randint(10, 99)}"
+                }
+                
+                results.append(result)
+                
+            except Exception as e:
+                self.logger.warning(f"批量项目 {i} 处理失败: {str(e)}")
+                results.append({
+                    **item,
+                    "success": False,
+                    "error": str(e),
+                    "batch_id": batch_id,
+                    "item_index": i
+                })
+        
+        successful_count = len([r for r in results if r.get("success")])
+        self.logger.info(f"批量处理完成: {batch_id}", extra={
+            "successful": successful_count,
+            "total": len(items)
+        })
+        
+        return results
     
-    async def _trigger_success_callbacks(
-        self, 
-        process_id: str, 
-        result: Dict[str, Any]
-    ) -> None:
-        """触发成功回调"""
-        # 创建一个模拟的task对象用于回调
-        class MockTask:
-            def __init__(self, task_id: str, result: Any):
-                self.task_id = task_id
-                self.task_name = "foo_async_processing"
-                self.status = "success"
-                self.result = result
-                self.error = None
-                self.duration = result.get("processing_time", 0)
+    @network_retry(attempts=3)  # 网络调用重试
+    async def call_external_service(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        调用外部服务 - 模拟外部依赖调用
+        """
+        self.logger.info(f"调用外部服务: {endpoint}")
         
-        mock_task = MockTask(process_id, result)
-        await self.callback_manager.trigger_callbacks(mock_task, "success")
-    
-    async def _trigger_failure_callbacks(
-        self, 
-        process_id: str, 
-        error_result: Dict[str, Any]
-    ) -> None:
-        """触发失败回调"""
-        class MockTask:
-            def __init__(self, task_id: str, error_result: Dict[str, Any]):
-                self.task_id = task_id
-                self.task_name = "foo_async_processing"
-                self.status = "failed"
-                self.result = None
-                self.error = error_result.get("error")
-                self.duration = 0
+        # 模拟网络延迟
+        await asyncio.sleep(random.uniform(0.1, 0.5))
         
-        mock_task = MockTask(process_id, error_result)
-        await self.callback_manager.trigger_callbacks(mock_task, "failed")
-    
-    async def _call_external_async_api(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """模拟调用外部异步API"""
-        await asyncio.sleep(0.1)  # 模拟API调用时间
+        # 模拟网络失败（20%概率）
+        if random.random() < 0.2:
+            raise ConnectionError(f"外部服务调用失败: {endpoint}")
         
-        return {
-            "tracking_id": f"ext_{random.randint(10000, 99999)}",
-            "status": "accepted",
-            "estimated_completion": "5-10 minutes"
+        # 模拟成功响应
+        response = {
+            "external_service": endpoint,
+            "request_data": data,
+            "response_id": f"ext_{random.randint(10000, 99999)}",
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "success"
         }
-    
-    async def enable_callback_system(self) -> None:
-        """启用回调系统"""
-        self.enable_callbacks = True
-        if not self.callback_manager._running:
-            await self.callback_manager.start()
-        self.logger.info("回调系统已启用")
-    
-    async def disable_callback_system(self) -> None:
-        """禁用回调系统"""
-        self.enable_callbacks = False
-        if self.callback_manager._running:
-            await self.callback_manager.shutdown()
-        self.logger.info("回调系统已禁用")
-    
-    def get_callback_statistics(self) -> Dict[str, Any]:
-        """获取回调统计信息"""
-        if not self.enable_callbacks:
-            return {"enabled": False}
         
+        self.logger.info(f"外部服务调用成功: {endpoint}")
+        return response
+    
+    @api_cache(ttl=600)  # 缓存10分钟
+    async def get_cached_data(self, key: str) -> Dict[str, Any]:
+        """
+        获取缓存数据 - 模拟缓存机制
+        """
+        self.logger.debug(f"获取缓存数据: {key}")
+        
+        # 模拟数据库或外部API调用
+        await asyncio.sleep(0.5)
+        
+        cached_data = {
+            "key": key,
+            "data": f"cached_value_{random.randint(1000, 9999)}",
+            "generated_at": datetime.utcnow().isoformat(),
+            "cache_ttl": 600
+        }
+        
+        self.logger.debug(f"缓存数据生成: {key}")
+        return cached_data
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """服务健康检查"""
+        try:
+            # 模拟健康检查逻辑
+            await asyncio.sleep(0.01)
+            
+            # 检查服务状态
+            is_healthy = self._processing_count >= 0  # 简单检查
+            
+            return {
+                "service": self.service_name,
+                "status": "healthy" if is_healthy else "unhealthy",
+                "processing_count": self._processing_count,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"健康检查失败: {str(e)}")
+            return {
+                "service": self.service_name,
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+    
+    def reset_counters(self) -> Dict[str, Any]:
+        """重置计数器 - 用于测试"""
+        old_count = self._processing_count
+        self._processing_count = 0
+        
+        self.logger.info(f"计数器已重置: {old_count} -> 0")
         return {
-            "enabled": True,
-            "statistics": self.callback_manager.get_statistics()
+            "old_count": old_count,
+            "new_count": self._processing_count,
+            "reset_at": datetime.utcnow().isoformat()
         }
 
 
@@ -268,6 +283,7 @@ class FooService(BaseService):
 _foo_service = None
 
 def get_foo_service() -> FooService:
+    """获取Foo服务实例"""
     global _foo_service
     if _foo_service is None:
         _foo_service = FooService()
