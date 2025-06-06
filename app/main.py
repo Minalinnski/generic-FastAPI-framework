@@ -1,4 +1,4 @@
-# app/main.py
+# app/main.py (更新版)
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,7 +11,6 @@ from app.api.middleware.logging_middleware import LoggingMiddleware
 from app.api.v1.main_router import api_router
 from app.application.config.settings import get_settings
 from app.infrastructure.logging.logger import setup_logging, get_logger
-from app.infrastructure.cache.task_result_cache import task_result_cache
 from app.infrastructure.tasks.task_manager import task_manager
 
 # 初始化日志
@@ -28,22 +27,22 @@ async def lifespan(app: FastAPI):
     logger.info("应用启动中...", extra={
         "app_name": settings.app_name,
         "version": settings.app_version,
-        "environment": settings.environment
+        "environment": settings.environment,
+        "task_storage_s3_enabled": settings.task_enable_s3_storage and bool(settings.s3_bucket)
     })
     
     try:
-        # 初始化任务管理器
-        logger.info("初始化任务管理器...")
-        # task_manager 已经是全局实例，这里可以做额外的初始化
-        
-        # 初始化任务结果缓存
-        logger.info("初始化任务结果缓存...")
-        # task_result_cache 已经是全局实例
+        # 启动任务管理器
+        logger.info("启动任务管理器...")
+        await task_manager.start()
         
         # 设置应用状态
         app.state.task_manager = task_manager
-        app.state.task_result_cache = task_result_cache
         app.state.settings = settings
+        
+        # 记录任务系统配置
+        task_config = settings.get_service_config("task")
+        logger.info("任务系统配置", extra=task_config)
         
         logger.info("应用启动完成")
         
@@ -60,9 +59,14 @@ async def lifespan(app: FastAPI):
         # 关闭任务管理器
         await task_manager.shutdown()
         
-        # 清理缓存统计
-        cache_stats = task_result_cache.get_statistics()
-        logger.info("任务结果缓存统计", extra=cache_stats)
+        # 获取最终统计信息
+        storage_stats = task_manager.storage.get_storage_statistics()
+        worker_stats = task_manager.worker_pool.get_statistics()
+        
+        logger.info("任务系统关闭完成", extra={
+            "storage_stats": storage_stats,
+            "worker_stats": worker_stats["current_state"]
+        })
         
         logger.info("应用关闭完成")
         
@@ -77,7 +81,7 @@ def create_app() -> FastAPI:
     # 创建应用实例
     app = FastAPI(
         title=settings.app_name,
-        description="A scalable FastAPI framework following DDD principles",
+        description="A scalable FastAPI framework following DDD principles with advanced task management",
         version=settings.app_version,
         docs_url=settings.docs_url if not settings.is_production else None,
         redoc_url=settings.redoc_url if not settings.is_production else None,
@@ -105,12 +109,20 @@ def create_app() -> FastAPI:
     @app.get("/", tags=["root"])
     async def root():
         """API根路径"""
+        task_config = settings.task_storage_config
+        
         return {
             "message": f"欢迎使用 {settings.app_name}",
             "version": settings.app_version,
             "environment": settings.environment,
             "docs": f"{settings.api_prefix}/docs" if settings.docs_url else None,
-            "health": f"{settings.api_prefix}/health"
+            "health": f"{settings.api_prefix}/health",
+            "features": {
+                "task_system": "enabled",
+                "s3_storage": task_config["enable_s3_storage"],
+                "callback_support": "per_service",
+                "worker_scaling": "dynamic"
+            }
         }
     
     return app

@@ -1,4 +1,4 @@
-# app/config/core_config.yaml - 核心框架配置
+# app/application/config/core_config.yaml - 核心框架配置（更新版）
 framework:
   name: "FastAPI DDD Framework"
   version: "0.1.0"
@@ -25,7 +25,7 @@ cors:
 
 logging:
   level: "INFO"
-  format: "json"  # json or console
+  format: "console"  # json or console
   log_sql: false
 
 security:
@@ -44,6 +44,16 @@ infrastructure:
     retry_delay: 5
     result_cache_size: 1000
     result_cache_ttl: 7200
+    
+    # 新增：存储配置
+    enable_s3_storage: true
+    s3_persist_threshold_kb: 10  # 超过10KB自动持久化到S3
+    s3_persist_long_tasks: true  # 长时间任务自动持久化
+    
+    # 新增：调度配置
+    scheduler_interval: 0.1  # 调度器轮询间隔（秒）
+    cleanup_interval: 3600   # 清理间隔（秒，1小时）
+    max_history_hours: 168   # 历史保留时间（小时，7天）
 
   rate_limiting:
     enabled: true

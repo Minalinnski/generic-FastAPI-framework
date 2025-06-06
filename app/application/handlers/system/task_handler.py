@@ -1,4 +1,4 @@
-# app/application/handlers/task_handler.py - 修复后的任务处理器
+# app/application/handlers/system/task_handler.py (完整版)
 import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -6,210 +6,182 @@ from typing import Any, Dict, List, Optional
 from app.application.handlers.base_handler import BaseHandler
 from app.application.services.system.task_service import TaskService
 from app.infrastructure.tasks.task_manager import task_manager
-from app.infrastructure.tasks.task_registry import task_registry
-from app.schemas.dtos.request.task_request import TaskCreateRequest
+from app.infrastructure.tasks.task_registry import TaskRegistry
+from app.infrastructure.tasks.base_task import create_simple_task, create_service_task, TaskPriority
+from app.schemas.dtos.request.task_request import (
+    TaskCreateRequest, TaskQueryRequest, TaskCancelRequest, 
+    TaskListRequest, TaskBulkOperationRequest
+)
 from app.schemas.dtos.response.task_response import (
     TaskResponse, TaskListResponse, TaskStatisticsResponse, 
-    TaskTypesResponse, TaskSubmitResponse
+    TaskTypesResponse, TaskSubmitResponse, TaskBulkOperationResponse
 )
-from app.schemas.enums.base_enums import TaskStatusEnum
+from app.schemas.enums.base_enums import TaskStatusEnum, TaskTypeEnum
 from app.infrastructure.utils.datetime_utils import parse_datetime
 
 
 class TaskHandler(BaseHandler[Dict[str, Any]]):
-    """任务管理处理器"""
+    """任务管理处理器 - 完整实现"""
     
     def __init__(self):
         super().__init__()
         self.task_service = TaskService()
         self.task_manager = task_manager
-        self.task_registry = task_registry
+        self.task_registry = TaskRegistry()
     
     async def submit_task(self, request: TaskCreateRequest) -> TaskSubmitResponse:
         """提交任务"""
         try:
             self.logger.info(f"提交任务: {request.task_name}", extra={
                 "task_type": request.task_type,
-                "priority": request.priority
+                "priority": request.priority,
+                "timeout": request.timeout
             })
             
-            # 验证任务参数
-            validated_params = self.task_registry.validate_task_params(
-                request.task_name, request.params
-            )
-            
-            # 从注册表创建任务
-            task = self.task_registry.create_task(
-                request.task_name,
-                task_options={
-                    "priority": self._convert_priority(request.priority),
-                    "timeout": request.timeout,
-                    "max_retries": request.max_retries,
-                    "tags": request.tags
-                }
-            )
-            
-            if not task:
+            # 检查任务是否已注册
+            if not self._is_task_registered(request.task_name):
                 raise ValueError(f"未注册的任务类型: {request.task_name}")
             
+            # 创建任务实例
+            task = await self._create_task_from_request(request)
+            
+            if not task:
+                raise ValueError(f"无法创建任务: {request.task_name}")
+            
             # 提交任务到管理器
-            task_id = await self.task_manager.submit_task(task, **validated_params)
+            task_id = await self.task_manager.submit_task(task, **request.params)
+            
+            # 获取队列信息
+            queue_info = self.task_manager.get_queue_info()
             
             return TaskSubmitResponse(
                 task_id=task_id,
                 status=TaskStatusEnum.PENDING,
-                queue_position=self._get_queue_position(task_id),
-                estimated_start_time=self._estimate_start_time(),
-                estimated_completion_time=self._estimate_completion_time(request.timeout)
+                queue_position=queue_info.get("queue_size", 0),
+                estimated_start_time=self._estimate_start_time(queue_info),
+                estimated_completion_time=self._estimate_completion_time(request.timeout, queue_info)
             )
             
         except Exception as e:
-            self.logger.error(f"提交任务失败: {str(e)}")
+            self.logger.error(f"提交任务失败: {request.task_name} - {str(e)}")
             raise
     
-    def _convert_priority(self, priority_int: int):
-        """转换优先级整数为枚举"""
-        from app.infrastructure.tasks.base_task import TaskPriority
-        return TaskPriority.from_int(priority_int)
-    
-    def _get_queue_position(self, task_id: str) -> Optional[int]:
-        """获取队列位置（简化实现）"""
-        queue_info = self.task_manager.get_queue_info()
-        return queue_info.get("queue_size", 0) + 1
-    
-    def _estimate_start_time(self) -> Optional[datetime]:
-        """估算开始时间（简化实现）"""
-        return None  # 可以根据队列情况计算
-    
-    def _estimate_completion_time(self, timeout: int) -> Optional[datetime]:
-        """估算完成时间（简化实现）"""
-        return None  # 可以根据开始时间+超时计算
-    
-    async def get_task_status(self, task_id: str) -> TaskResponse:
+    async def get_task_status(self, request: TaskQueryRequest) -> TaskResponse:
         """获取任务状态"""
         try:
-            # 先从任务管理器获取
-            status_info = self.task_manager.get_task_status(task_id)
+            task_id = request.task_id
+            
+            # 先从任务管理器获取活跃任务
+            status_info = await self.task_manager.get_task_status(task_id)
             
             if not status_info:
-                # 尝试从缓存获取历史任务
-                cached_result = self.task_service.result_cache.get(task_id)
-                if cached_result:
-                    status_info = cached_result
-                else:
-                    raise ValueError("任务不存在")
+                # 从存储中获取历史任务
+                status_info = await self.task_manager.storage.get_task_result(task_id)
+                
+                if not status_info:
+                    raise ValueError(f"任务不存在: {task_id}")
+            
+            # 根据请求参数过滤返回数据
+            if not request.include_result:
+                status_info.pop("result", None)
+            
+            if not request.include_metadata:
+                status_info.pop("metadata", None)
             
             return self._convert_to_task_response(status_info)
             
         except Exception as e:
-            self.logger.error(f"获取任务状态失败: {str(e)}")
+            self.logger.error(f"获取任务状态失败: {request.task_id} - {str(e)}")
             raise
     
-    async def get_task_list(self, limit: int = 50, offset: int = 0) -> TaskListResponse:
+    async def cancel_task(self, request: TaskCancelRequest) -> Dict[str, Any]:
+        """取消任务"""
+        try:
+            task_id = request.task_id
+            reason = request.reason or "用户取消"
+            
+            if request.force:
+                # 强制终止
+                success = self.task_manager.force_kill_task(task_id, f"强制取消: {reason}")
+            else:
+                # 正常取消
+                success = await self.task_manager.cancel_task(task_id, reason)
+            
+            if not success:
+                raise ValueError(f"任务不存在或无法取消: {task_id}")
+            
+            return {
+                "task_id": task_id,
+                "cancelled": True,
+                "reason": reason,
+                "force": request.force,
+                "cancelled_at": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"取消任务失败: {request.task_id} - {str(e)}")
+            raise
+    
+    async def get_task_list(self, request: TaskListRequest) -> TaskListResponse:
         """获取任务列表"""
         try:
             # 获取活跃任务
             active_tasks = self.task_manager.get_all_tasks()
             
             # 获取历史任务
-            historical_tasks = await self.task_service.get_task_history(limit=limit*2)
+            historical_tasks = await self.task_service.get_task_history(limit=request.limit * 2)
             
-            # 合并并去重
-            all_tasks_dict = {}
+            # 合并任务数据
+            all_tasks = self._merge_task_data(active_tasks, historical_tasks)
             
-            # 活跃任务优先
-            for task_data in active_tasks:
-                all_tasks_dict[task_data["task_id"]] = task_data
+            # 应用过滤条件
+            filtered_tasks = self._filter_tasks(all_tasks, request)
             
-            # 添加历史任务（不覆盖活跃任务）
-            for task_data in historical_tasks:
-                task_id = task_data.get("task_id")
-                if task_id and task_id not in all_tasks_dict:
-                    all_tasks_dict[task_id] = task_data
+            # 排序
+            sorted_tasks = self._sort_tasks(filtered_tasks, request.sort_by, request.sort_order)
             
-            # 转换为列表并分页
-            all_tasks = list(all_tasks_dict.values())
-            total = len(all_tasks)
+            # 分页
+            total = len(sorted_tasks)
+            start_idx = request.offset
+            end_idx = start_idx + request.limit
+            paginated_tasks = sorted_tasks[start_idx:end_idx]
             
-            # 按时间排序（最新的在前）
-            all_tasks.sort(
-                key=lambda x: x.get("created_at") or x.get("start_time") or "", 
-                reverse=True
-            )
-            
-            paginated_tasks = all_tasks[offset:offset + limit]
-            
-            # 转换为TaskResponse格式
+            # 转换为响应格式
             task_responses = [
                 self._convert_to_task_response(task_data)
                 for task_data in paginated_tasks
             ]
             
+            page = (request.offset // request.limit) + 1 if request.limit > 0 else 1
+            
             return TaskListResponse(
                 tasks=task_responses,
                 total=total,
-                page=(offset // limit) + 1 if limit > 0 else 1,
+                page=page,
                 size=len(task_responses),
-                has_next=offset + limit < total,
-                has_prev=offset > 0
+                has_next=end_idx < total,
+                has_prev=request.offset > 0
             )
             
         except Exception as e:
             self.logger.error(f"获取任务列表失败: {str(e)}")
             raise
     
-    async def get_registered_tasks(self) -> TaskTypesResponse:
-        """获取已注册的任务类型"""
-        try:
-            registered_tasks = self.task_registry.get_registered_tasks()
-            registry_stats = self.task_registry.get_registry_stats()
-            categories = self.task_registry.get_all_categories()
-            
-            sync_tasks = []
-            async_tasks = []
-            
-            for name, task_type in registered_tasks.items():
-                task_info = self.task_registry.get_task_info(name)
-                if task_info:
-                    if task_info.get("is_async", True):
-                        async_tasks.append(name)
-                    else:
-                        sync_tasks.append(name)
-                else:
-                    # 默认异步
-                    async_tasks.append(name)
-            
-            return TaskTypesResponse(
-                sync_tasks=sync_tasks,
-                async_tasks=async_tasks,
-                total_registered=len(registered_tasks),
-                task_categories=categories
-            )
-            
-        except Exception as e:
-            self.logger.error(f"获取任务类型失败: {str(e)}")
-            raise
-    
-    async def cancel_task(self, task_id: str) -> Dict[str, Any]:
-        """取消任务"""
-        try:
-            success = self.task_manager.cancel_task(task_id, "用户取消")
-            
-            if not success:
-                raise ValueError("任务不存在或无法取消")
-            
-            return {"cancelled": True, "task_id": task_id, "reason": "用户取消"}
-            
-        except Exception as e:
-            self.logger.error(f"取消任务失败: {str(e)}")
-            raise
-    
     async def get_task_statistics(self) -> TaskStatisticsResponse:
         """获取任务统计信息"""
         try:
-            stats = await self.task_service.get_task_statistics()
+            # 获取核心统计
+            stats = await self.task_manager.get_statistics()
             runtime_stats = stats["runtime"]
             performance_stats = stats["performance"]
+            
+            # 获取详细状态分布
+            all_tasks = self.task_manager.get_all_tasks()
+            status_distribution = self._calculate_status_distribution(all_tasks)
+            priority_distribution = self._calculate_priority_distribution(all_tasks)
+            
+            # 计算24小时统计
+            recent_stats = await self._calculate_recent_stats()
             
             return TaskStatisticsResponse(
                 total_tasks=runtime_stats["total_tasks"],
@@ -217,83 +189,323 @@ class TaskHandler(BaseHandler[Dict[str, Any]]):
                 completed_tasks=runtime_stats["completed_tasks"],
                 failed_tasks=runtime_stats["failed_tasks"],
                 pending_tasks=runtime_stats["pending_tasks"],
-                cancelled_tasks=runtime_stats.get("cancelled_tasks", 0),
+                cancelled_tasks=runtime_stats["cancelled_tasks"],
                 average_duration=performance_stats.get("avg_execution_time", 0.0),
                 median_duration=performance_stats.get("median_execution_time", 0.0),
                 success_rate=runtime_stats.get("success_rate", 0.0),
                 failure_rate=1.0 - runtime_stats.get("success_rate", 0.0),
                 worker_utilization=runtime_stats.get("worker_utilization", 0.0),
                 queue_size=runtime_stats.get("queue_size", 0),
-                max_queue_size=1000,  # 从配置获取
-                last_24h_completed=0,  # TODO: 实现24小时统计
-                last_24h_failed=0,
-                status_distribution=self._extract_status_distribution(runtime_stats),
-                priority_distribution=self._extract_priority_distribution(runtime_stats)
+                max_queue_size=10000,  # 可配置
+                last_24h_completed=recent_stats["completed"],
+                last_24h_failed=recent_stats["failed"],
+                status_distribution=status_distribution,
+                priority_distribution=priority_distribution
             )
             
         except Exception as e:
             self.logger.error(f"获取任务统计失败: {str(e)}")
             raise
     
-    def _extract_status_distribution(self, stats: Dict[str, Any]) -> Dict[str, int]:
-        """提取状态分布"""
-        return {
-            "pending": stats.get("pending_tasks", 0),
-            "running": stats.get("running_tasks", 0),
-            "completed": stats.get("completed_tasks", 0),
-            "failed": stats.get("failed_tasks", 0),
-            "cancelled": stats.get("cancelled_tasks", 0)
-        }
+    async def get_registered_tasks(self) -> TaskTypesResponse:
+        """获取已注册的任务类型"""
+        try:
+            # 获取注册信息
+            registered_tasks = self.task_registry.get_task_types()
+            
+            # 分类任务类型
+            sync_tasks = []
+            async_tasks = []
+            task_categories = {}
+            
+            for task_name, task_info in registered_tasks.items():
+                task_type = task_info.get("type", "async")
+                category = task_info.get("category", "general")
+                
+                if task_type == "sync":
+                    sync_tasks.append(task_name)
+                else:
+                    async_tasks.append(task_name)
+                
+                if category not in task_categories:
+                    task_categories[category] = []
+                task_categories[category].append(task_name)
+            
+            return TaskTypesResponse(
+                sync_tasks=sync_tasks,
+                async_tasks=async_tasks,
+                total_registered=len(registered_tasks),
+                task_categories=task_categories
+            )
+            
+        except Exception as e:
+            self.logger.error(f"获取任务类型失败: {str(e)}")
+            raise
     
-    def _extract_priority_distribution(self, stats: Dict[str, Any]) -> Dict[str, int]:
-        """提取优先级分布"""
-        # TODO: 从任务管理器获取真实的优先级分布
-        return {
-            "urgent": 0,
-            "high": 0,
-            "normal": 0,
-            "low": 0
-        }
+    async def bulk_operation(self, request: TaskBulkOperationRequest) -> TaskBulkOperationResponse:
+        """批量任务操作"""
+        try:
+            operation = request.operation
+            task_ids = request.task_ids
+            params = request.params
+            
+            results = []
+            successful = 0
+            failed = 0
+            
+            for task_id in task_ids:
+                try:
+                    if operation == "cancel":
+                        force = params.get("force", False)
+                        reason = params.get("reason", "批量取消")
+                        
+                        if force:
+                            success = self.task_manager.force_kill_task(task_id, reason)
+                        else:
+                            success = await self.task_manager.cancel_task(task_id, reason)
+                        
+                        if success:
+                            successful += 1
+                            results.append({"task_id": task_id, "success": True})
+                        else:
+                            failed += 1
+                            results.append({"task_id": task_id, "success": False, "error": "任务不存在或无法取消"})
+                    
+                    elif operation == "delete":
+                        delete_from_s3 = params.get("delete_from_s3", False)
+                        deletion_result = await self.task_manager.storage.delete_result(task_id, delete_from_s3)
+                        
+                        if deletion_result["deleted_from"]:
+                            successful += 1
+                            results.append({"task_id": task_id, "success": True, "deleted_from": deletion_result["deleted_from"]})
+                        else:
+                            failed += 1
+                            results.append({"task_id": task_id, "success": False, "error": "任务结果不存在"})
+                    
+                    else:
+                        failed += 1
+                        results.append({"task_id": task_id, "success": False, "error": f"不支持的操作: {operation}"})
+                
+                except Exception as e:
+                    failed += 1
+                    results.append({"task_id": task_id, "success": False, "error": str(e)})
+            
+            return TaskBulkOperationResponse(
+                operation=operation,
+                total_requested=len(task_ids),
+                successful=successful,
+                failed=failed,
+                results=results
+            )
+            
+        except Exception as e:
+            self.logger.error(f"批量操作失败: {str(e)}")
+            raise
     
     async def cleanup_completed_tasks(self, max_history: int = 1000) -> Dict[str, Any]:
-        """清理已完成的任务历史"""
+        """清理已完成的任务"""
         try:
-            result = await self.task_service.cleanup_old_results()
-            result["max_history"] = max_history
-            return result
+            cleanup_result = await self.task_service.cleanup_old_results()
+            cleanup_result["max_history"] = max_history
+            cleanup_result["cleaned_at"] = datetime.utcnow().isoformat()
+            
+            return cleanup_result
             
         except Exception as e:
             self.logger.error(f"清理任务失败: {str(e)}")
             raise
     
+    def _is_task_registered(self, task_name: str) -> bool:
+        """检查任务是否已注册"""
+        registered_tasks = self.task_registry.get_task_types()
+        return task_name in registered_tasks
+    
+    async def _create_task_from_request(self, request: TaskCreateRequest):
+        """从请求创建任务实例"""
+        try:
+            task_name = request.task_name
+            priority = TaskPriority.from_int(request.priority)
+            
+            # 这里可以根据任务名称创建不同类型的任务
+            # 简化实现：创建一个通用的服务任务
+            
+            # 获取任务信息
+            registered_tasks = self.task_registry.get_task_types()
+            task_info = registered_tasks.get(task_name)
+            
+            if not task_info:
+                return None
+            
+            # 根据任务类型创建任务实例
+            if task_info.get("type") == "service":
+                # 服务任务
+                service_name = task_info.get("service_name")
+                method_name = task_info.get("method_name")
+                
+                # 这里应该从依赖注入容器获取服务实例
+                # 简化实现
+                return create_service_task(
+                    task_name=task_name,
+                    service_instance=self.task_service,  # 示例
+                    method_name=method_name or "execute_task",
+                    priority=priority.value,
+                    timeout=request.timeout,
+                    max_retries=request.max_retries
+                )
+            else:
+                # 函数任务
+                task_func = task_info.get("function")
+                if task_func:
+                    return create_simple_task(
+                        task_name=task_name,
+                        task_func=task_func,
+                        priority=priority.value,
+                        timeout=request.timeout,
+                        max_retries=request.max_retries
+                    )
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"创建任务失败: {request.task_name} - {str(e)}")
+            return None
+    
+    def _merge_task_data(self, active_tasks: List[Dict], historical_tasks: List[Dict]) -> List[Dict]:
+        """合并活跃任务和历史任务"""
+        task_dict = {}
+        
+        # 活跃任务优先
+        for task_data in active_tasks:
+            task_id = task_data.get("task_id")
+            if task_id:
+                task_dict[task_id] = task_data
+        
+        # 添加历史任务（不覆盖活跃任务）
+        for task_data in historical_tasks:
+            task_id = task_data.get("task_id")
+            if task_id and task_id not in task_dict:
+                task_dict[task_id] = task_data
+        
+        return list(task_dict.values())
+    
+    def _filter_tasks(self, tasks: List[Dict], request: TaskListRequest) -> List[Dict]:
+        """根据请求参数过滤任务"""
+        filtered = tasks
+        
+        if request.status_filter:
+            filtered = [t for t in filtered if t.get("status") == request.status_filter]
+        
+        if request.task_name_filter:
+            filtered = [t for t in filtered if t.get("task_name") == request.task_name_filter]
+        
+        if request.priority_min is not None:
+            filtered = [t for t in filtered if t.get("priority", 0) >= request.priority_min]
+        
+        if request.priority_max is not None:
+            filtered = [t for t in filtered if t.get("priority", 0) <= request.priority_max]
+        
+        if request.tags_filter:
+            filtered = [
+                t for t in filtered 
+                if any(tag in t.get("tags", []) for tag in request.tags_filter)
+            ]
+        
+        return filtered
+    
+    def _sort_tasks(self, tasks: List[Dict], sort_by: str, sort_order: str) -> List[Dict]:
+        """排序任务"""
+        reverse = sort_order.lower() == "desc"
+        
+        try:
+            if sort_by == "created_at":
+                return sorted(tasks, key=lambda x: x.get("created_at") or "", reverse=reverse)
+            elif sort_by == "priority":
+                return sorted(tasks, key=lambda x: x.get("priority", 0), reverse=reverse)
+            elif sort_by == "status":
+                return sorted(tasks, key=lambda x: x.get("status", ""), reverse=reverse)
+            elif sort_by == "duration":
+                return sorted(tasks, key=lambda x: x.get("duration", 0), reverse=reverse)
+            else:
+                # 默认按创建时间排序
+                return sorted(tasks, key=lambda x: x.get("created_at") or "", reverse=True)
+        except Exception:
+            # 排序失败时返回原列表
+            return tasks
+    
+    def _calculate_status_distribution(self, tasks: List[Dict]) -> Dict[str, int]:
+        """计算状态分布"""
+        distribution = {}
+        for task in tasks:
+            status = task.get("status", "unknown")
+            distribution[status] = distribution.get(status, 0) + 1
+        return distribution
+    
+    def _calculate_priority_distribution(self, tasks: List[Dict]) -> Dict[str, int]:
+        """计算优先级分布"""
+        priority_names = {0: "low", 1: "normal", 2: "high", 3: "urgent"}
+        distribution = {"low": 0, "normal": 0, "high": 0, "urgent": 0}
+        
+        for task in tasks:
+            priority = task.get("priority", 1)
+            priority_name = priority_names.get(priority, "normal")
+            distribution[priority_name] += 1
+        
+        return distribution
+    
+    async def _calculate_recent_stats(self) -> Dict[str, int]:
+        """计算最近24小时统计"""
+        # 简化实现，实际应该从存储中查询24小时内的任务
+        cutoff_time = datetime.utcnow().timestamp() - 86400  # 24小时前
+        
+        # 这里应该实现实际的时间范围查询
+        return {
+            "completed": 0,
+            "failed": 0
+        }
+    
+    def _estimate_start_time(self, queue_info: Dict) -> Optional[datetime]:
+        """估算开始时间"""
+        queue_size = queue_info.get("queue_size", 0)
+        if queue_size == 0:
+            return datetime.utcnow()
+        
+        # 简单估算：假设每个任务平均1分钟
+        estimated_delay = queue_size * 60
+        return datetime.utcnow().timestamp() + estimated_delay
+    
+    def _estimate_completion_time(self, timeout: Optional[int], queue_info: Dict) -> Optional[datetime]:
+        """估算完成时间"""
+        start_time = self._estimate_start_time(queue_info)
+        if start_time and timeout:
+            return start_time + timeout
+        return None
+    
     def _convert_to_task_response(self, task_data: Dict[str, Any]) -> TaskResponse:
         """转换任务数据为TaskResponse格式"""
-        start_time = None
-        end_time = None
-        
         # 安全的时间解析
-        if task_data.get("start_time"):
+        def safe_parse_datetime(dt_str):
+            if not dt_str:
+                return None
             try:
-                if isinstance(task_data["start_time"], str):
-                    start_time = parse_datetime(task_data["start_time"])
+                if isinstance(dt_str, str):
+                    return parse_datetime(dt_str)
+                elif isinstance(dt_str, datetime):
+                    return dt_str
                 else:
-                    start_time = task_data["start_time"]
+                    return None
             except:
-                start_time = None
+                return None
         
-        if task_data.get("end_time"):
-            try:
-                if isinstance(task_data["end_time"], str):
-                    end_time = parse_datetime(task_data["end_time"])
-                else:
-                    end_time = task_data["end_time"]
-            except:
-                end_time = None
+        start_time = safe_parse_datetime(task_data.get("start_time"))
+        end_time = safe_parse_datetime(task_data.get("end_time"))
+        created_at = safe_parse_datetime(task_data.get("created_at"))
         
         # 确定任务类型
-        task_type = task_data.get("task_type", "async")
-        if "metadata" in task_data and "task_type" in task_data["metadata"]:
-            task_type = task_data["metadata"]["task_type"]
+        task_type_str = task_data.get("task_type", "async")
+        if task_type_str == "sync":
+            task_type = TaskTypeEnum.SYNC
+        else:
+            task_type = TaskTypeEnum.ASYNC
         
         return TaskResponse(
             task_id=task_data["task_id"],
@@ -313,19 +525,39 @@ class TaskHandler(BaseHandler[Dict[str, Any]]):
             max_retries=task_data.get("max_retries", 0),
             tags=task_data.get("tags"),
             worker_id=task_data.get("worker_id"),
-            queue_position=None,  # TODO: 实现队列位置查询
-            estimated_completion=None  # TODO: 实现完成时间估算
+            queue_position=None,  # 实时计算较复杂，暂时为None
+            estimated_completion=None,  # 同上
+            created_at=created_at,
+            updated_at=end_time or start_time or created_at
         )
     
     async def _process_request(self, request_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """处理任务相关请求的通用方法"""
         if not request_data:
-            return {"message": "TaskHandler就绪，任务管理系统正常运行"}
+            # 返回任务系统状态概览
+            stats = await self.get_task_statistics()
+            queue_info = self.task_manager.get_queue_info()
+            storage_stats = self.task_manager.storage.get_storage_statistics()
+            
+            return {
+                "message": "TaskHandler就绪，任务管理系统正常运行",
+                "system_overview": {
+                    "total_tasks": stats.total_tasks,
+                    "running_tasks": stats.running_tasks,
+                    "queue_size": queue_info["queue_size"],
+                    "worker_utilization": queue_info["worker_utilization"],
+                    "storage_enabled": storage_stats.get("s3_enabled", False)
+                }
+            }
         
         action = request_data.get("action", "status")
         
         if action == "statistics":
             stats = await self.get_task_statistics()
             return stats.dict()
+        elif action == "queue_info":
+            return self.task_manager.get_queue_info()
+        elif action == "storage_stats":
+            return self.task_manager.storage.get_storage_statistics()
         else:
-            return {"message": f"TaskHandler处理中: {action}"}
+            return {"message": f"TaskHandler处理中: {action}", "data": request_data}

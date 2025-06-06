@@ -1,4 +1,4 @@
-# app/config/settings.py
+# app/application/config/settings.py (更新版)
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0, ge=0, le=15)
     redis_password: Optional[str] = Field(default=None)
     
-    # === 缓存设置 ===
+    # === 通用缓存设置 ===
     cache_default_ttl: int = Field(default=3600, ge=0)
     cache_key_prefix: str = Field(default="app:")
     cache_max_size: int = Field(default=10000, ge=1)
@@ -81,8 +81,18 @@ class Settings(BaseSettings):
     task_max_workers: int = Field(default=4, ge=1, le=100)
     task_retry_attempts: int = Field(default=3, ge=0, le=10)
     task_retry_delay: int = Field(default=5, ge=1)
+    
+    # === 任务存储设置 ===
     task_result_cache_size: int = Field(default=1000, ge=1)
     task_result_cache_ttl: int = Field(default=7200, ge=0)
+    task_enable_s3_storage: bool = Field(default=True)  # 新增：S3存储开关
+    task_s3_persist_threshold_kb: int = Field(default=10, ge=1)  # 新增：S3持久化阈值
+    task_s3_persist_long_tasks: bool = Field(default=True)  # 新增：长时间任务自动持久化
+    
+    # === 任务调度设置 ===
+    task_scheduler_interval: float = Field(default=0.1, ge=0.01, le=1.0)  # 新增：调度间隔
+    task_cleanup_interval: int = Field(default=3600, ge=60)  # 新增：清理间隔
+    task_max_history_hours: int = Field(default=168, ge=1)  # 新增：历史保留时间（7天）
     
     # === 限流设置 ===
     rate_limit_enabled: bool = Field(default=True)
@@ -174,6 +184,9 @@ class Settings(BaseSettings):
                     "infrastructure_tasks_retry_delay": "task_retry_delay",
                     "infrastructure_tasks_result_cache_size": "task_result_cache_size",
                     "infrastructure_tasks_result_cache_ttl": "task_result_cache_ttl",
+                    "infrastructure_tasks_enable_s3_storage": "task_enable_s3_storage",  # 新增
+                    "infrastructure_tasks_scheduler_interval": "task_scheduler_interval",  # 新增
+                    "infrastructure_tasks_cleanup_interval": "task_cleanup_interval",  # 新增
                     "infrastructure_rate_limiting_enabled": "rate_limit_enabled",
                     "infrastructure_rate_limiting_requests_per_minute": "rate_limit_requests_per_minute",
                     "infrastructure_rate_limiting_burst_size": "rate_limit_burst_size",
@@ -219,10 +232,22 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """是否为开发环境"""
         return self.environment == "development"
+    
+    @property
+    def task_storage_config(self) -> Dict[str, Any]:
+        """任务存储配置"""
+        return {
+            "memory_cache_size": self.task_result_cache_size,
+            "memory_cache_ttl": self.task_result_cache_ttl,
+            "enable_s3_storage": self.task_enable_s3_storage and bool(self.s3_bucket),
+            "s3_persist_threshold_kb": self.task_s3_persist_threshold_kb,
+            "s3_persist_long_tasks": self.task_s3_persist_long_tasks,
+            "cleanup_interval": self.task_cleanup_interval,
+            "max_history_hours": self.task_max_history_hours
+        }
 
     def get_service_config(self, service_name: str) -> Dict[str, Any]:
         """获取特定服务的配置"""
-        # 这里可以扩展为更复杂的服务配置获取逻辑
         service_configs = {
             "health": {
                 "timeout": self.health_check_timeout,
@@ -232,8 +257,8 @@ class Settings(BaseSettings):
                 "max_workers": self.task_max_workers,
                 "retry_attempts": self.task_retry_attempts,
                 "retry_delay": self.task_retry_delay,
-                "result_cache_size": self.task_result_cache_size,
-                "result_cache_ttl": self.task_result_cache_ttl,
+                "scheduler_interval": self.task_scheduler_interval,
+                "storage": self.task_storage_config
             },
             "cache": {
                 "default_ttl": self.cache_default_ttl,

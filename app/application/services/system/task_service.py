@@ -1,26 +1,27 @@
-# app/application/services/system/task_service.py (更新)
+# app/application/services/system/task_service.py (更新版)
+from typing import Any, Dict, List, Optional
+from datetime import datetime
+
 from app.application.services.service_interface import BaseService
 from app.infrastructure.tasks.task_manager import task_manager
-from app.infrastructure.tasks.enhanced_task_registry import TaskRegistry
-from app.infrastructure.tasks.result_storage import TaskResultStorage
+from app.infrastructure.tasks.task_registry import TaskRegistry
 
 
 class TaskService(BaseService):
-    """任务管理服务 - 增强版"""
+    """任务管理服务 - 使用新的存储系统"""
     
     def __init__(self):
         super().__init__()
         self.task_manager = task_manager
         self.task_registry = TaskRegistry()
-        self.result_storage = TaskResultStorage()
     
     def get_service_info(self) -> Dict[str, Any]:
         return {
             "service_name": self.service_name,
-            "description": "增强的任务管理和监控服务",
+            "description": "任务管理和监控服务",
             "version": "2.0.0",
             "category": "system",
-            "features": ["task_monitoring", "result_storage", "s3_persistence"]
+            "features": ["task_monitoring", "unified_storage", "callback_support"]
         }
     
     async def get_task_registry_info(self) -> Dict[str, Any]:
@@ -36,12 +37,12 @@ class TaskService(BaseService):
         return self.task_registry.search_tasks(query)
     
     async def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """获取任务结果（支持S3）"""
-        return await self.result_storage.get_result(task_id)
+        """获取任务结果（统一存储）"""
+        return await self.task_manager.storage.get_task_result(task_id)
     
     async def delete_task_result(self, task_id: str, delete_from_s3: bool = False) -> Dict[str, Any]:
         """删除任务结果"""
-        return await self.result_storage.delete_result(task_id, delete_from_s3)
+        return await self.task_manager.storage.delete_result(task_id, delete_from_s3)
     
     async def force_kill_task(self, task_id: str, reason: str = "手动终止") -> Dict[str, Any]:
         """强制终止任务"""
@@ -56,18 +57,20 @@ class TaskService(BaseService):
     
     async def get_storage_statistics(self) -> Dict[str, Any]:
         """获取存储统计"""
-        return self.result_storage.get_storage_stats()
+        return self.task_manager.storage.get_storage_statistics()
     
-    async def cleanup_system(self, max_age_hours: int = 24) -> Dict[str, Any]:
-        """清理系统"""
-        # 清理结果存储
-        storage_cleanup = await self.result_storage.cleanup_old_results(max_age_hours)
-        
-        # 清理任务管理器历史
-        manager_cleanup = self.task_manager.cleanup_completed_tasks(1000)
-        
-        return {
-            "storage_cleanup": storage_cleanup,
-            "manager_cleanup": manager_cleanup,
-            "cleaned_at": datetime.utcnow().isoformat()
-        }
+    async def cleanup_old_results(self, max_age_hours: int = 24) -> Dict[str, Any]:
+        """清理旧结果"""
+        return await self.task_manager.storage.cleanup_old_results(max_age_hours)
+    
+    async def get_task_statistics(self) -> Dict[str, Any]:
+        """获取任务统计信息"""
+        return await self.task_manager.get_statistics()
+    
+    async def get_task_history(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取任务历史"""
+        return await self.task_manager.storage.get_task_history(limit)
+    
+    async def scale_workers(self, target_count: int) -> Dict[str, Any]:
+        """动态调整工作者数量"""
+        return await self.task_manager.worker_pool.scale_workers(target_count)

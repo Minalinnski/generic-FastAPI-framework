@@ -4,7 +4,7 @@
 """
 import asyncio
 from functools import wraps
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 from fastapi import Request
 from app.infrastructure.tasks.request_task import RequestTask
 from app.infrastructure.tasks.task_manager import task_manager
