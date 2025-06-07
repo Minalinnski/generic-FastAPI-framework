@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.middleware.error_handler import ErrorHandlerMiddleware
 from src.api.middleware.logging_middleware import LoggingMiddleware
-from src.api.v1.main_router import api_router
+from src.api.routers.main_router import api_router
 from src.application.config.settings import get_settings
 from src.infrastructure.logging.logger import setup_logging, get_logger
 from src.infrastructure.tasks.task_manager import task_manager

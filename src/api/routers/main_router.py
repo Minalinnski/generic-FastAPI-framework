@@ -1,9 +1,9 @@
 # src/api/v1/main_router.py
 from fastapi import APIRouter
 
-from src.api.v1.routers.system.health_router import router as health_router
-from src.api.v1.routers.system.task_router import router as task_router
-from src.api.v1.routers.foo_router import router as foo_router
+from src.api.routers.v1.system.health_router import router as health_router
+from src.api.routers.v1.system.task_router import router as task_router
+from src.api.routers.v1.foo_router import router as foo_router
 
 # 创建API v1主路由
 api_router = APIRouter()
