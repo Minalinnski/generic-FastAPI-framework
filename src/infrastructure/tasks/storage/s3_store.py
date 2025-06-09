@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.infrastructure.logging.logger import get_logger
-from src.infrastructure.external_services.s3_service import s3_service
+from src.application.services.external.s3_service import s3_service
 
 logger = get_logger(__name__)
 

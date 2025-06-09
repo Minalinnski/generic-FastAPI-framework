@@ -1,7 +1,7 @@
 # src/application/handlers/foo_handler.py
 import asyncio
 from typing import Any, Dict, Optional
-from src.application.handlers.base_handler import BaseHandler
+from src.application.handlers.handler_interface import BaseHandler
 from src.application.services.foo_service import get_foo_service
 from src.infrastructure.decorators.retry import simple_retry
 from src.infrastructure.decorators.cache import short_cache

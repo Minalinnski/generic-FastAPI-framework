@@ -141,7 +141,7 @@ class Settings(BaseSettings):
 
     def _load_config_files(self) -> None:
         """加载YAML配置文件"""
-        config_dir = Path(__file__).parent
+        config_dir = Path(__file__).parent / "system"
         
         # 加载核心配置
         core_config_path = config_dir / "core_config.yaml"

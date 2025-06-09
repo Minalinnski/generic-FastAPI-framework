@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.application.handlers.base_handler import BaseHandler
+from src.application.handlers.handler_interface import BaseHandler
 from src.application.services.system.task_service import TaskService
 from src.infrastructure.tasks.task_manager import task_manager
 from src.infrastructure.tasks.task_registry import TaskRegistry

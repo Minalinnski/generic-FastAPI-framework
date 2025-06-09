@@ -2,7 +2,7 @@
 import asyncio
 from datetime import datetime
 
-from src.application.handlers.base_handler import BaseHandler
+from src.application.handlers.handler_interface import BaseHandler
 from src.schemas.dtos.response.health_response import HealthData
 from src.application.services.system.health_service import HealthService
 
